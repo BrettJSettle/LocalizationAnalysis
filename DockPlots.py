@@ -59,6 +59,7 @@ class FilterWidget(QtGui.QDialog):
                 if l not in filters:
                     filters[l] = {}
                 filters[l].update({v: (color.redF(), color.greenF(), color.blueF(), color.alphaF())})
+        self.dock.filters = {}
         self.dock.update(filters=filters)
         self.close()
 
@@ -81,6 +82,8 @@ class FilterWidget(QtGui.QDialog):
             if not all([type(a) == str for a in data]):
                 data = [str(i) for i in data]
             valueSpin.addItems(data)
+            if str(value) in data:
+                valueSpin.setCurrentIndex(data.index(str(value)))
 
         if column == 'Default':
             columnSpin = QtGui.QLabel(column)
