@@ -1,4 +1,4 @@
-from PyQt4 import QtGui, QtCore
+
 import dep_check
 
 import pandas as pd
@@ -11,25 +11,124 @@ from pyqtgraph.console import *
 from PyQt4.QtCore import *
 
 import os, difflib, time, vispy.scene, threading
-from visuals import MyROI, MyCluster
+
+from collections import defaultdict
+from tools._dbscan import *
+from PyQt4 import QtGui, QtCore
+from visuals import MyROI
 from vispy.scene import visuals
 from vispy.scene.cameras import MagnifyCamera, Magnify1DCamera, PanZoomCamera
 
-from sklearn.cluster import DBSCAN
-
 app = QtGui.QApplication([])
+
+class FilterWidget(QtGui.QDialog):
+    def __init__(self, dock):
+        QtGui.QDialog.__init__(self)
+        self.dock = dock
+        self.filters = []
+        self.layout = QtGui.QFormLayout()
+        buttonBox = QtGui.QDialogButtonBox(QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel)
+        self.colorDialog=QtGui.QColorDialog()
+        addFilter = QtGui.QPushButton("Add Filter")
+        addFilter.setMaximumWidth(100)
+        for l in self.dock.filters:
+            if type(self.dock.filters[l]) != dict:
+                f = self.makeFilter(column=l, color=self.dock.filters[l])
+            else:
+                for v in self.dock.filters[l]:
+                    f = self.makeFilter(column=l, value = v, color=self.dock.filters[l][v])
+        addFilter.pressed.connect(self.makeFilter)
+        self.layout.addRow('', addFilter)
+        self.layout.addWidget(buttonBox)
+        buttonBox.accepted.connect(self.applyFilter)
+        self.setLayout(self.layout)
+        buttonBox.rejected.connect(self.close)
+        self.colorDialog.colorSelected.connect(self.colorSelected)
+        self.show()
+
+    def applyFilter(self):
+        filters = {}
+        for w in self.filters:
+            cs = w.children()
+            l = cs[2].currentText() if type(cs[2]) == QtGui.QComboBox else cs[2].text()
+            v = cs[3].currentText() if cs[3].isVisible() else ''
+            color = cs[4].palette().color(QtGui.QPalette.Background)
+            if l == 'Default':
+                filters[l] = (color.redF(), color.greenF(), color.blueF(), color.alphaF())
+            else:
+                if l not in filters:
+                    filters[l] = {}
+                filters[l].update({v: (color.redF(), color.greenF(), color.blueF(), color.alphaF())})
+        self.dock.update(filters=filters)
+        self.close()
+
+    def colorSelected(self, c):
+        self.currentButton.setStyleSheet("background-color: rgba(%d, %d, %d, %d);" % (c.red(), c.green(), c.blue(), c.alpha()))
+
+    def makeFilter(self, column=None, value=None, color=None):
+        w = QtGui.QWidget()
+        lay = QtGui.QHBoxLayout()
+        removeButton = QtGui.QPushButton('-')
+        removeButton.setMaximumWidth(30)
+        valueSpin = QtGui.QComboBox()
+        colorButton = QtGui.QPushButton("Set Color")
+        removeButton.pressed.connect(lambda : self.removeFilter(w))
+
+        def setValues(i):
+            valueSpin.clear()
+            s = self.dock.data.columns[i]
+            data = np.unique(self.dock.data[s].values.astype(str))[:30]
+            if not all([type(a) == str for a in data]):
+                data = [str(i) for i in data]
+            valueSpin.addItems(data)
+
+        if column == 'Default':
+            columnSpin = QtGui.QLabel(column)
+            removeButton.setVisible(False)
+            valueSpin.setVisible(False)
+        else:
+            columnSpin = QtGui.QComboBox()
+            columnSpin.currentIndexChanged.connect(setValues)
+            columnSpin.addItems(self.dock.data.columns)
+            if column != None:
+                columnSpin.setCurrentIndex(list(self.dock.data.columns).index(column))
+            
+        if color != None:
+            color = tuple(255 * i for i in color)
+            colorButton.setStyleSheet("background-color: rgba(%d, %d, %d, %d);" % color)
+        
+        def colorPressed():
+            self.currentButton = colorButton
+            self.colorDialog.show()
+
+        colorButton.pressed.connect(colorPressed)
+        lay.addWidget(removeButton)
+        lay.addWidget(columnSpin)
+        lay.addWidget(valueSpin)
+        lay.addWidget(colorButton)
+        w.setLayout(lay)
+        self.layout.insertRow(self.layout.rowCount() - 2, w)
+        self.filters.append(w)
+
+    def removeFilter(self, w):
+        self.layout.removeWidget(w)
+        w.close()
+        self.filters.remove(w)
 
 class PlotDock(Dock):
     sigUpdated = Signal(object)
     sigROITranslated = Signal(object)
     def __init__(self, name, data):
         Dock.__init__(self, name, closable=True)
+        data.insert(0, 'File', os.path.basename(name))
         self.canvas = vispy.scene.SceneCanvas(keys='interactive')
         self.grid = self.canvas.central_widget.add_grid()
         self.vb = self.grid.add_view(row=0, col=0)
         self.layout.addWidget(self.canvas.native)
         
         self.scatter = visuals.Markers()
+        self.scatter.set_data(pos=np.zeros((2, 3)))
+        self.vb.add(self.scatter)
 
         self.gridLines = visuals.GridLines(parent=self.vb.scene)
         self.vb.camera = PanZoomCamera()
@@ -39,12 +138,13 @@ class PlotDock(Dock):
         self.currentROI = None
         self.rois = []
         self.pos = [0, 0]
-        self.setData(data)
+        self.filters = {}
+        self.update(filters={'Default': (np.random.random(), np.random.random(), np.random.random(), 1.)}, data=data)
 
 
     def dataStr(self):
         s = 'Name: %s\n' % self.name()
-        s += "Mouse: (%f, %f)\n" % (self.pos[0], self.pos[1])
+        s += "Mouse: (%.2f, %.2f)\n" % (self.pos[0], self.pos[1])
         s += 'N Points: %s\n' % len(self.data)
         s += '\n'
         if len(self.rois) > 0:
@@ -63,6 +163,70 @@ class PlotDock(Dock):
         pos[1] = 1-pos[1]
         r = self.vb.camera.rect
         return r.pos + pos * r.size
+
+    def exportROIs(self):
+        fname = fm.getSaveFileName()
+        if fname == '':
+            return
+        s = [repr(roi) for roi in self.rois]
+        s = '\n'.join(s)
+        open(fname, 'w').write(s)
+
+    def getColors(self):
+        colors = np.array([self.filters['Default']] * len(self.data))
+        for f in self.filters:
+            if f != 'Default':
+                for v in self.filters[f]:
+                    colors[self.data[f].values.astype(str) == v] = self.filters[f][v]
+        return colors
+
+    def importROIs(self):
+        fname = fm.getOpenFileName()
+        if fname == '':
+            return
+        rois = ROIVisual.importROIs(fname, self)
+        self.rois.extend(rois)
+
+    def clearROIs(self):
+        while len(self.rois) > 0:
+            self.rois[0].delete()
+
+    def exportPoints(self):
+        fname = fm.getSaveFileName()
+        if fname == '':
+            return
+        open(fname, 'w').write(str(self.data))
+
+    def addChannel(self, name=None, data=[]):
+        if name == None:
+            name = fm.getOpenFileName()
+        if name == '':
+            return
+
+        if len(data) == 0:
+            self.fileWidget = FileViewWidget(name)
+            self.fileWidget.accepted.connect(lambda d : self.addChannel(name, d))
+            self.fileWidget.show()
+            return
+
+        data.insert(0, 'File', os.path.basename(name))
+        self.update(data=pd.concat([self.data, data]), filters={'File': {os.path.basename(name): (np.random.random(), np.random.random(), np.random.random(), 1)}})
+
+    def showFilter(self):
+        self.filterWidget = FilterWidget(self)
+        self.filterWidget.show()
+
+    def raiseContextMenu(self, pos):
+        self.menu = QtGui.QMenu(self.name())
+        self.menu.addAction("Add Channel", self.addChannel)
+        roiMenu = self.menu.addMenu("ROIs")
+        roiMenu.addAction("Import from txt", self.importROIs)
+        roiMenu.addAction("Export to txt", self.exportROIs)
+        roiMenu.addAction("Clear All", self.clearROIs)
+        self.menu.addAction("Export Points", self.exportPoints)
+        self.menu.addAction("Filter", self.showFilter)
+        self.menu.addAction("Close Dock", self.close)
+        self.menu.popup(pos)
 
     def mouseEvent(self, ev):
         self.sigUpdated.emit(self)
@@ -86,10 +250,10 @@ class PlotDock(Dock):
                                 if roi.hover:
                                     roi.raiseContextMenu(self.canvas.native.mapToGlobal(QtCore.QPoint(*ev.pos)))
                                     return
+                            self.raiseContextMenu(self.canvas.native.mapToGlobal(QtCore.QPoint(*ev.pos)))
                 elif ev.press_event.type == 'mouse_move':
                     self.currentROI.extend(pos)
             else:
-                
                 self.currentROI = MyROI(self, pos, parent=self.canvas.scene)
                 self.currentROI.transform = self.vb._camera._transform
         elif ev.button == 1 and (self.currentROI != None or any([roi.hover for roi in self.rois])):
@@ -112,184 +276,63 @@ class PlotDock(Dock):
         else:
             self.canvas.scene.__class__._process_mouse_event(self.canvas.scene, ev)
 
-    def setData(self, data):
-        pos = np.transpose([data['Xc'], data['Yc']])
-        self.data = data
-        self.scatter.set_data(pos, edge_color=None, face_color=(0, 1, 0, 1), size=3)
-        self.vb.add(self.scatter)
-        w, h = np.ptp(pos, 0)
-        x, y = np.min(pos, 0)
-        self.vb.camera.rect = (x, y, w, h)
+    def update(self, data=[], filters=None, autoRange=True):
+        if np.size(data) != 0:
+            self.data = data
+        if filters != None:
+            for f in filters:
+                if f == 'Default':
+                    self.filters['Default'] = filters['Default']
+                else:
+                    if f not in self.filters:
+                        self.filters[f] = filters[f]
+                    else:
+                        self.filters[f].update(filters[f])
 
-class DensityBasedScanner(QtCore.QThread):
-    '''
-    Density Based Clustering algorithm on a list of ActivePoint objects. returns a list of clustered point lists, and a list of noise points
-    '''
-    messageEmit = Signal(str)
-    scanFinished = Signal(object, object)
-    def __init__(self, points = [], epsilon = 30, minP = 5, minNeighbors = 1):
-        QtCore.QThread.__init__(self)
-        self.points = points
-        self.epsilon = epsilon
-        self.minP = minP
-        self.minNeighbors = minNeighbors
-        self.clusters = []
-        self.roi = None
-        self.scanner = DBSCAN(eps=self.epsilon, min_samples=self.minNeighbors)
+        colors = self.getColors()
+        pos = np.transpose([self.data['Xc'], self.data['Yc']])
+        self.scatter.set_data(pos, edge_color=None, face_color=colors, size=3)
+        if autoRange:
+            w, h = np.ptp(pos, 0)
+            x, y = np.min(pos, 0)
+            self.vb.camera.rect = (x, y, w, h)
 
-    def update(self, roi, epsilon=None, minP = None, minNeighbors = None):
-        if self.roi != None and roi != self.roi:
-            self.roi.dock.sigROITranslated.disconnect(self.roiTranslated)
-        if epsilon != None:
-            self.epsilon = epsilon
-        if minP != None:
-            self.minP = minP
-        if minNeighbors != None:
-            self.minNeighbors = minNeighbors
-        self.roi = roi
-        self.roi.dock.sigROITranslated.connect(self.roiTranslated)
-        self.points = self.roi.internal_points
-        self.scanner = DBSCAN(eps=self.epsilon, min_samples=self.minNeighbors)
-
-    def roiTranslated(self, roi):
-        if roi == self.roi:
-            self.clearClusters()
-
-    def clearClusters(self):
-        for cl in self.clusters:
-            cl.remove_parent(cl.parent)
-        self.clusters = []
-
-    def run(self):
-        self.clearClusters()
-        if len(self.points) == 0:
-            return
-        labels = self.scanner.fit_predict([p for p in self.points])
-        noise = [self.points[p] for p in np.where(labels == -1)[0]]
-        for i in range(1, max(labels) + 1):
-            clust = []
-            for p in np.where(labels == i)[0]:
-                clust.append(self.points[p])
-            if len(clust) >= self.minP:
-                cl = MyCluster(clust, parent=self.roi.dock.canvas.scene)
-                cl.transform = self.roi.dock.vb._camera._transform
-                self.clusters.append(cl)
-            else:
-                noise.extend(clust)
-            self.messageEmit.emit("Analyzed %d of %d clusters" % (i, max(labels)))
-        self.scanFinished.emit(self.clusters, noise)
-
-
-class DBScanWidget(QtGui.QWidget):
-    def __init__(self, window):
-        QtGui.QWidget.__init__(self)
-        self.window = window
-        layout = QtGui.QFormLayout()
-        self.setLayout(layout)
-        self.epsilonSpin = pg.SpinBox(value=4)
-        self.densitySpin = pg.SpinBox(value=1, int=True, step=1)
-        self.minSizeSpin = pg.SpinBox(value=3, int=True, step=1)
-        self.roiComboBox = pg.ComboBox()
-        self.roiComboBox.mousePressEvent = self.comboBoxClicked
-        self.roiComboBox.updating = False
-        self.scanButton = QtGui.QPushButton("Cluster")
-        self.scanButton.pressed.connect(self.scan)
-        self.table = pg.TableWidget()
-        layout.addRow("Epsilon:", self.epsilonSpin)
-        layout.addRow("Min Density:", self.densitySpin)
-        layout.addRow("Min N Points:", self.minSizeSpin)
-        layout.addRow("ROI:", self.roiComboBox)
-        layout.addRow(self.table)
-        layout.addRow(self.scanButton)
-        self.table.setMinimumHeight(200)
-
-        self.table.save = self.save
-
-        self.scanThread = DensityBasedScanner()
-        self.scanThread.scanFinished.connect(self.scanFinished)
-
-    def save(self, data):
-        fileName = QtGui.QFileDialog.getSaveFileName(self, "Save As..", "", "Text File (*.txt)")
-        if fileName == '':
-            return
-        data = '\t'.join(["N Points", 'Xc', 'Yc', 'Average Internal Distance']) + '\n' + data
-        open(fileName, 'w').write(data)
-
-    def scan(self):
-        if not hasattr(self, 'rois'):
-            return
-        eps = self.epsilonSpin.value()
-        density = self.densitySpin.value()
-        minSize = self.minSizeSpin.value()
-        self.scanThread.update(self.rois[self.roiComboBox.currentIndex()], epsilon=eps, minNeighbors=density, minP=minSize)
-        self.window.statusBar().showMessage('Clustering %d points.' % len(self.rois[self.roiComboBox.currentIndex()].internal_points))
-        self.scanThread.start_time = time.time()
-        self.scanThread.start()
-
-    def scanFinished(self, clusters, noise):
-        values = []
-        self.clusters = clusters
-        for cluster in clusters[:100]:
-            values.append([len(cluster.points), cluster.centroid[0], cluster.centroid[1], cluster.averageDistance])
-        self.table.setData(values)
-
-        self.table.setHorizontalHeaderLabels(["N Points", 'Xc', 'Yc', 'Average Internal Distance'])
-        self.window.statusBar().showMessage('%d clusters found (%s s)' % (len(clusters), time.time() - self.scanThread.start_time))
-
-    def comboBoxClicked(self, ev):
-        txt = self.roiComboBox.currentText()
-        self.roiComboBox.updating = True
-        self.roiComboBox.clear()
-        self.rois = []
-        for d in self.window.dockarea.docks.values():
-            self.rois.extend(d.rois)
-        if len(self.rois) == 0:
-            self.roiComboBox.addItem("No Trace Selected")
-        else:
-            model = self.roiComboBox.model()
-            for roi in self.rois:
-                item = QtGui.QStandardItem("ROI #%d" % (roi.id))
-                item.setBackground(pg.mkBrush(roi.color.rgb))
-                model.appendRow(item)
-        self.roiComboBox.updating = False
-        QtGui.QComboBox.mousePressEvent(self.roiComboBox, ev)
 
 class MainWindow(QtGui.QMainWindow):
     def __init__(self):
         QtGui.QMainWindow.__init__(self)
+        self.resize(1000, 800)
+        self.installEventFilter(self)
 
         fileMenu = self.menuBar().addMenu('File')
-        openAction = QtGui.QAction("Open File", fileMenu, triggered=self.open_file_gui)
-        fileMenu.addAction(openAction)
-        self.recentMenu = QtGui.QMenu('Recent Files')
-        fileMenu.addMenu(self.recentMenu)
+        fileMenu.addAction("Open File", self.open_file_gui)
+        self.recentMenu = fileMenu.addMenu('Recent Files')
         viewMenu = self.menuBar().addMenu('View')
-        consoleAction = QtGui.QAction('Console', viewMenu, triggered=self.show_console)
-        viewMenu.addAction(consoleAction)
+        viewMenu.addAction('Console', self.show_console)
+
 
         widget = QtGui.QWidget()
         layout = QtGui.QGridLayout(widget)
         widget.setLayout(layout)
-        self.setCentralWidget(widget)
 
         self.optionsWidget = QtGui.QWidget()
         self.optionsWidget.setMaximumWidth(200)
         self.optionsWidget.setMinimumWidth(200)
         self.options_layout = QtGui.QVBoxLayout(self.optionsWidget)
         self.infoEdit = QtGui.QTextEdit("Information Here")
-        #self.infoEdit.setMaximumHeight(300)
+        self.infoEdit.setReadOnly(True) 
         self.scanWidget = DBScanWidget(self)
         self.options_layout.addWidget(self.infoEdit)
         self.options_layout.addWidget(self.scanWidget)
 
-        layout.addWidget(self.optionsWidget, 0, 0)
-
         self.dockarea = DockArea()
+
+        layout.addWidget(self.optionsWidget, 0, 0)
         layout.addWidget(self.dockarea, 0, 1)
         layout.setColumnStretch(0, 1)
 
-        self.resize(1000, 800)
-        self.installEventFilter(self)
+        self.setAcceptDrops(True)
+        self.setCentralWidget(widget)
         self.update_history()
 
     def update_history(self):
@@ -310,7 +353,9 @@ class MainWindow(QtGui.QMainWindow):
     def open_file(self, f):
         f = str(f)
         self.update_history()
-        self.read_file(f)
+        self.fileWidget = FileViewWidget(f)
+        self.fileWidget.accepted.connect(lambda d: self.addDock(f, d))
+        self.fileWidget.show()
     
     def showDockData(self, dock):
         self.infoEdit.setText(dock.dataStr())
@@ -338,11 +383,11 @@ class MainWindow(QtGui.QMainWindow):
                 filename=url.toString()
                 filename=filename.split('file:///')[1]
                 if filename.endswith('.txt'):
-                    dataWindow.statusBar().showMessage('Loading points from %s' % (filename))
-                    import_channels(filename)
-                    file_manager.update_history(filename)
+                    self.statusBar().showMessage('Loading points from %s' % (filename))
+                    self.read_file(filename)
+                    fm.update_history(filename)
                 else:
-                    obj.statusBar().showMessage('%s widget does not support %s files...' % (obj.__name__, filetype))
+                    self.statusBar().showMessage('No support for %s files...' % filename[-4])
                 event.accept()
             else:
                 event.ignore()
@@ -354,55 +399,63 @@ class MainWindow(QtGui.QMainWindow):
             self.c.close()
 
 
-    def read_file(self, filename):
-        self.fileWidget = QtGui.QWidget()
+class FileViewWidget(QtGui.QWidget):
+    accepted = Signal(object)
+    def __init__(self, filename):
+        self.filename = filename
+        QtGui.QWidget.__init__(self)
         layout = QtGui.QFormLayout()
-        self.fileWidget.setLayout(layout)
+        self.setLayout(layout)
         data = [l.strip().split('\t') for l in open(filename, 'r').readlines()[:20]]
 
         dataWidget = pg.TableWidget(editable=True, sortable=False)
         dataWidget.setData(data)
         dataWidget.setMaximumHeight(300)
         layout.addRow(dataWidget)
-        headerCheck = QtGui.QCheckBox('Skip First Row As Headers')
-        headerCheck.setChecked('Xc' in data[0])
-        xComboBox = QtGui.QComboBox()
-        yComboBox = QtGui.QComboBox()
+        self.headerCheck = QtGui.QCheckBox('Skip First Row As Headers')
+        self.headerCheck.setChecked('Xc' in data[0])
+        self.xComboBox = QtGui.QComboBox()
+        self.yComboBox = QtGui.QComboBox()
         names = data[0]
 
         for i in range(dataWidget.columnCount()):
-            xComboBox.addItem(str(i+1))
-            yComboBox.addItem(str(i+1))
+            self.xComboBox.addItem(str(i+1))
+            self.yComboBox.addItem(str(i+1))
 
         Xc = data[0].index('Xc') if 'Xc' in data[0] else 0
         Yc = data[0].index('Yc') if 'Yc' in data[0] else 1
-        xComboBox.setCurrentIndex(Xc)   
-        yComboBox.setCurrentIndex(Yc)
+        self.xComboBox.setCurrentIndex(Xc)   
+        self.yComboBox.setCurrentIndex(Yc)
         
-        layout.addRow('Headers', headerCheck)
-        layout.addRow('Xc Column', xComboBox)
-        layout.addRow('Yc Column', yComboBox)
+        layout.addRow('Headers', self.headerCheck)
+        layout.addRow('Xc Column', self.xComboBox)
+        layout.addRow('Yc Column', self.yComboBox)
         buttonBox = QtGui.QDialogButtonBox(QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel)
         layout.addRow(buttonBox)
-        self.fileWidget.show()
+        buttonBox.accepted.connect(self.import_data)
+        buttonBox.rejected.connect(self.close)
+        self.setWindowTitle(filename)
 
-        def import_data():
-            if headerCheck.isChecked():
-                data = pd.read_table(filename)
-                if 'Xc' not in data or 'Yc' not in data:
-                    cols = list(data.columns)
-                    cols[int(xComboBox.currentText())-1] = 'Xc'
-                    cols[int(yComboBox.currentText())-1] = 'Yc'
-                    data.columns = cols
-            else:
-                data = np.loadtxt(filename, usecols=[int(xComboBox.currentText())-1, int(yComboBox.currentText())-1], dtype={'names': ['Xc', 'Yc'], 'formats':[np.float, np.float]})
-            self.addDock(filename, data)
-            self.fileWidget.close()
-            del self.fileWidget
+    def import_data(self):
+        if self.headerCheck.isChecked():
+            data = pd.read_table(self.filename)
+            if 'Xc' not in data or 'Yc' not in data:
+                cols = list(data.columns)
+                cols[int(self.xComboBox.currentText())-1] = 'Xc'
+                cols[int(self.yComboBox.currentText())-1] = 'Yc'
+                data.columns = cols
+            for i in range(len(data.columns)):
+                try:
+                    if all(np.isnan(data.values[:, i])):
+                        data = data.drop(data.columns[[i]], axis=1)
+                except:
+                    pass
+        else:
+            data = np.loadtxt(self.filename, usecols=[int(self.xComboBox.currentText())-1, int(self.yComboBox.currentText())-1], dtype={'names': ['Xc', 'Yc'], 'formats':[np.float, np.float]})
+        self.accepted.emit(data)
+        self.close()
 
-        buttonBox.accepted.connect(import_data)
-        buttonBox.rejected.connect(self.fileWidget.close)
-        self.fileWidget.setWindowTitle(filename)
+        
 
 
 if __name__ == '__main__':

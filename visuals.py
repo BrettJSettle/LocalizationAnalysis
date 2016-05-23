@@ -29,7 +29,7 @@ class ROIVisual(PolygonVisual):
         self.text.text = "%d" % self.id
 
     @staticmethod
-    def importROIs(fname):
+    def importROIs(fname, parent):
         rois = []
         text = open(fname, 'r').read()
         kind=None
@@ -39,10 +39,7 @@ class ROIVisual(PolygonVisual):
                 kind=line
                 pts=[]
             elif line=='':
-                rois.append(ROIVisual(1, pts[0]))
-                for p in pts[1:]:
-                    rois[-1].extend(p)
-                rois[-1].draw_finished()
+                rois.append(MyROI(parent, pts, parent=parent.canvas.scene))
                 kind=None
                 pts=None
             elif kind == 'freehand':
