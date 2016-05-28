@@ -147,9 +147,6 @@ File: %s
     Centroid: (%0.2f, %0.2f)
     Avg. Dist.: %0.2f\n''' % (f, self.analysis_data[f]['nPoints'], self.analysis_data[f]['centroid'][0], self.analysis_data[f]['centroid'][1], self.analysis_data[f]['avg_dist'])
 
-        for i in range(len(fs)):
-            for j in range(i+1, len(fs)):
-                s += '%s-%s: %.2f\n' % (fs[i], fs[j], distance(self.analysis_data[fs[i]]['centroid'], self.analysis_data[fs[j]]['centroid']))
         return s
         
 
