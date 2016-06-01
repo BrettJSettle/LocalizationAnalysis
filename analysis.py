@@ -19,13 +19,6 @@ def nearestDistances(points, points2=[]):
         dists.append(np.inf)
         for p2 in points2:
             dists[-1] = min(dists[-1], distance(p, p2))
-
-    if len(points2) > 0:
-        for p in points2:
-            dists.append(np.inf)
-            for p2 in points:
-                dists[-1] = min(dists[-1], distance(p, p2))
-
             
     return dists
 

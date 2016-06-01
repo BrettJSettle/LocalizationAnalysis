@@ -65,9 +65,6 @@ class PlotDock(Dock):
         s += "Mouse: (%.2f, %.2f)\n" % (self.pos[0], self.pos[1])
         s += 'N Points: %s\n' % len(self.data)
         s += '\n'
-        if len(self.rois) > 0:
-            for roi in self.rois:
-                s += '%s\n' % roi.dataStr
         return s
 
     def rescale(self):
@@ -168,7 +165,6 @@ class PlotDock(Dock):
         self.menu.popup(pos)
 
     def mouseEvent(self, ev):
-        self.sigUpdated.emit(self)
         pos = self.mapToCamera(ev.pos)
         self.pos = pos
         for roi in self.rois:
@@ -188,6 +184,7 @@ class PlotDock(Dock):
                             for roi in self.rois:
                                 if roi.hover:
                                     roi.raiseContextMenu(self.canvas.native.mapToGlobal(QtCore.QPoint(*ev.pos)))
+                                    self.sigUpdated.emit(self)
                                     return
                             self.raiseContextMenu(self.canvas.native.mapToGlobal(QtCore.QPoint(*ev.pos)))
                 elif ev.press_event.type == 'mouse_move':
@@ -214,6 +211,7 @@ class PlotDock(Dock):
                         break
         else:
             self.canvas.scene.__class__._process_mouse_event(self.canvas.scene, ev)
+        self.sigUpdated.emit(self)
 
     def update(self, data=[], colors=None, autoRange=True):
         if np.size(data) != 0:
@@ -243,35 +241,37 @@ class MainWindow(QtGui.QMainWindow):
     dockCreated = Signal(object)
     def __init__(self):
         QtGui.QMainWindow.__init__(self)
-        self.resize(1000, 800)
+        self.resize(1200, 800)
         self.installEventFilter(self)
 
-        widget = QtGui.QWidget()
-        layout = QtGui.QGridLayout(widget)
-        widget.setLayout(layout)
+        widget = QtGui.QSplitter(Qt.Horizontal)
 
         self.infoEdit = QtGui.QTextEdit("Information Here")
         self.infoEdit.setReadOnly(True) 
-        self.infoEdit.setMinimumHeight(300)
+        self.infoEdit.setMinimumHeight(200)
         self.synapseWidget = SynapseWidget(self)
+        self.roiData = pg.TableWidget()
+        self.roiData.setMinimumHeight(200)
 
         self.optionsArea = DockArea()
-        self.optionsArea.setMaximumWidth(200)
+        self.optionsArea.setMaximumWidth(300)
+        self.optionsArea.setMinimumWidth(200)
         self.optionsDock = self.optionsArea.addDock(name="Information", size=(200, 400), widget=self.infoEdit, hideTitle=True)
+        self.roiDock = self.optionsArea.addDock(name="ROI Data", size=(200, 400), widget=self.roiData, hideTitle=True)
         self.synapseDock = self.optionsArea.addDock(name="Synapse Analysis", size=(200, 200), widget=self.synapseWidget)
-        self.synapseDock.setVisible(False)
         
         self.dockarea = DockArea()
-        layout.addWidget(self.optionsArea, 0, 0)
-        layout.addWidget(self.dockarea, 0, 1)
-        layout.setColumnStretch(0, 1)
+        widget.addWidget(self.optionsArea)
+        widget.addWidget(self.dockarea)
 
         fileMenu = self.menuBar().addMenu('File')
         fileMenu.addAction("Open File(s)", self.open_file_gui)
         self.recentMenu = fileMenu.addMenu('Recent Files')
         viewMenu = self.menuBar().addMenu('View')
-        viewMenu.addAction(QtGui.QAction('Synapse Widget', viewMenu, triggered=self.synapseDock.setVisible, checkable=True))
+        self.synapseCheck = QtGui.QAction('Synapse Widget', viewMenu, triggered=self.synapseDock.setVisible, checkable=True)
+        viewMenu.addAction(self.synapseCheck)
         viewMenu.addAction('Console', self.show_console)
+        self.synapseCheck.setChecked(True)
         
         self.setAcceptDrops(True)
         self.setCentralWidget(widget)
@@ -307,7 +307,16 @@ class MainWindow(QtGui.QMainWindow):
         self.fileWidget.show()
     
     def showDockData(self, dock):
-        self.infoEdit.setText(dock.dataStr())
+        s = dock.dataStr()
+        self.infoEdit.setText(s)
+        data = []
+        for roi in dock.rois:
+            for ch in roi.analysis_data:
+                others = [roi.analysis_data[d]['centroid'] for d in roi.analysis_data if d != ch]
+                d = ('%.2f' % min([distance(roi.analysis_data[ch]['centroid'], o) for o in others])) if len(others) > 0 else 'NA'
+                data.append([ch, ['%.2f' % s for s in roi.analysis_data[ch]['centroid']], roi.analysis_data[ch]['nPoints'], '%.2f' % roi.analysis_data[ch]['avg_dist'], d])
+        self.roiData.setData(data)
+        self.roiData.setHorizontalHeaderLabels(['File', 'centroid', 'N Points', 'Avg. Dist', 'Nearest'])
 
     def addDock(self, f, data, **kwds):
         dock = PlotDock(os.path.basename(f), data, **kwds)
