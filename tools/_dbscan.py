@@ -43,6 +43,7 @@ class SynapseWidget(QtGui.QWidget):
         layout.addRow(self.scanButton)
         layout.addRow(self.simulateCheck, self.exportButton)
         self.table.setMinimumHeight(200)
+        self.table.setFormat('%.2f')
 
         self.table.save = self.save
         self.clusters = [[], []]
@@ -96,7 +97,7 @@ class SynapseWidget(QtGui.QWidget):
         fileName = fm.getSaveFileName(filter="Text File (*.txt)")
         if fileName == '':
             return
-        data = '\t'.join(["N Points", 'Xc', 'Yc', 'Average Internal Distance']) + '\n' + data
+        data = '\t'.join(["N Points", 'Xc', 'Yc', 'Avg. Internal Dist.']) + '\n' + data
         open(fileName, 'w').write(data)
 
     def scan(self):
@@ -153,7 +154,8 @@ class SynapseWidget(QtGui.QWidget):
         self.roiComboBox.clear()
         self.rois = []
         for d in self.window.dockarea.docks.values():
-            self.rois.extend(d.rois)
+            if d.isVisible():
+                self.rois.extend(d.rois)
         if len(self.rois) == 0:
             self.roiComboBox.addItem("No Trace Selected")
         else:

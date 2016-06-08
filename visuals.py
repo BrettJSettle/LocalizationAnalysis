@@ -6,6 +6,7 @@ from PyQt4 import QtGui, QtCore
 import pyqtgraph as pg
 import numpy as np
 import file_manager as fm
+import pyqtgraph.opengl as gl
 
 class ROIVisual(PolygonVisual):
     def __init__(self, dock, pos, color=[1, 1, 0]):
@@ -80,6 +81,8 @@ class ROIVisual(PolygonVisual):
         self.menu.addAction(QtGui.QAction("Change Color", self.menu, triggered = self.colorDialog.show))
         self.menu.addAction(QtGui.QAction("Remove Points in ROI", self.menu, triggered = self.removeInternalPoints))
         self.menu.addAction(QtGui.QAction("Export points in ROI", self.menu, triggered = self.exportInternalPoints))
+        if 'Zc' in self.dock.data.keys():
+            self.menu.addAction(QtGui.QAction("Plot Points in 3D", self.menu, triggered=self.plot3D))
         self.menu.addAction(QtGui.QAction("Remove", self.menu, triggered=self.delete))
 
     def removeInternalPoints(self):
@@ -87,6 +90,24 @@ class ROIVisual(PolygonVisual):
         data = self.dock.data.iloc[ids.astype(int)]
         self.dock.update(data=data, autoRange=False)
         self.analyze()
+
+    def plot3D(self):
+        ids = np.where([self.contains(p[:2]) for p in zip(self.dock.data.Xc.values, self.dock.data.Yc.values)])[0]
+        pos = self.dock.data.iloc[ids.astype(int)]
+        colors = self.dock.getColors(pos)
+        pos = np.transpose([pos.Xc.values, pos.Yc.values, pos.Zc.values])
+        item = gl.GLScatterPlotItem(pos=pos, color=colors, size=4)
+        widget = gl.GLViewWidget()
+        widget.addItem(item)
+
+        center = list(np.average(pos, 0))
+        atX, atY, atZ = widget.cameraPosition()
+        widget.pan(-atX, -atY, -atZ)
+        widget.opts['distance'] = 100
+        widget.opts['center'] = QtGui.QVector3D(*center)
+
+        dock = self.dock.window().dockarea.addDock(name="ROI %d" % self.id, size=(300, 300), widget=widget, closable=True)
+
 
     def exportInternalPoints(self, writer=None):
         if writer == None or type(writer) == bool:

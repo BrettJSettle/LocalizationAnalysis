@@ -23,6 +23,7 @@ from vispy.scene.cameras import MagnifyCamera, Magnify1DCamera, PanZoomCamera
 
 app = QtGui.QApplication([])
 
+
 class PlotDock(Dock):
     sigUpdated = Signal(object)
     sigROITranslated = Signal(object)
@@ -50,7 +51,6 @@ class PlotDock(Dock):
         if len(color) != 4:
             color = (np.random.random(), np.random.random(), np.random.random(), 1.)
         self.update(colors={'Default': color}, data=data)
-
 
     def resizeEvent(self, ev):
         Dock.resizeEvent(self, ev)
@@ -91,12 +91,14 @@ class PlotDock(Dock):
         s = '\n'.join(s)
         open(fname, 'w').write(s)
 
-    def getColors(self):
-        colors = np.array([self.colors['Default']] * len(self.data))
+    def getColors(self, data=[]):
+        if len(data) == 0:
+            data = self.data 
+        colors = np.array([self.colors['Default']] * len(data))
         for f in self.colors:
             if f != 'Default':
                 for v in self.colors[f]:
-                    colors[self.data[f].values.astype(str) == v] = self.colors[f][v]
+                    colors[data[f].values.astype(str) == v] = self.colors[f][v]
         return colors
 
     def importROIs(self):
@@ -272,10 +274,19 @@ class MainWindow(QtGui.QMainWindow):
         viewMenu.addAction(self.synapseCheck)
         viewMenu.addAction('Console', self.show_console)
         self.synapseCheck.setChecked(True)
+        self.roiData.save = self.save
         
         self.setAcceptDrops(True)
         self.setCentralWidget(widget)
         self.update_history()
+
+    def save(self, data):
+        fileName = fm.getSaveFileName(filter="Text File (*.txt)")
+        if fileName == '':
+            return
+        data = '\t'.join(["Ch1 N", 'Ch2 N', 'Distance', 'Ch1 XY', 'Ch2 XY']) + '\n' + data
+        open(fileName, 'w').write(data)
+
 
     def update_history(self):
         self.recentMenu.clear()
@@ -311,12 +322,29 @@ class MainWindow(QtGui.QMainWindow):
         self.infoEdit.setText(s)
         data = []
         for roi in dock.rois:
-            for ch in roi.analysis_data:
+            ch = list(roi.analysis_data.keys())
+            if len(ch) == 0:
+                data.append(["EMPTY"])
+                continue
+            elif len(ch) == 1:
+                ch1, ch2 = ch[0], None
+                c1 = roi.analysis_data[ch1]['centroid']
+                data.append([roi.analysis_data[ch1]['nPoints'], 'NA', 'NA', '(%.2f, %.2f)' % (c1[0], c1[1]), 'NA'])
+                continue 
+            elif len(ch) == 2:
+                ch1, ch2 = ch
+            elif len(ch) > 2:
+                ch1, ch2 = ch[:2]
+
+            c1, c2 = roi.analysis_data[ch1]['centroid'], roi.analysis_data[ch2]['centroid']
+            d = '%.2f' % distance(c1, c2)
+            data.append([roi.analysis_data[ch1]['nPoints'], roi.analysis_data[ch2]['nPoints'], d, '(%.2f, %.2f)' % (c1[0], c1[1]), '(%.2f, %.2f)' % (c2[0], c2[1])])
+            '''for ch in roi.analysis_data:
                 others = [roi.analysis_data[d]['centroid'] for d in roi.analysis_data if d != ch]
                 d = ('%.2f' % min([distance(roi.analysis_data[ch]['centroid'], o) for o in others])) if len(others) > 0 else 'NA'
-                data.append([ch, ['%.2f' % s for s in roi.analysis_data[ch]['centroid']], roi.analysis_data[ch]['nPoints'], '%.2f' % roi.analysis_data[ch]['avg_dist'], d])
+                data.append([ch, roi.analysis_data[ch]['centroid'], roi.analysis_data[ch]['nPoints'], roi.analysis_data[ch]['avg_dist'], d])'''
         self.roiData.setData(data)
-        self.roiData.setHorizontalHeaderLabels(['File', 'centroid', 'N Points', 'Avg. Dist', 'Nearest'])
+        self.roiData.setHorizontalHeaderLabels(['N Ch. 1', 'N Ch. 2', 'Dist.', 'Ch1 Centroid', 'Ch2 Centroid'])
 
     def addDock(self, f, data, **kwds):
         dock = PlotDock(os.path.basename(f), data, **kwds)
@@ -328,7 +356,7 @@ class MainWindow(QtGui.QMainWindow):
     def show_console(self):
         if not hasattr(self, 'c') or not self.c.isVisible():
             self.c = ConsoleWidget()
-            self.c.localNamespace.update({'self': self, 'PlotDock': PlotDock, 'dock':lambda i: [d for d in self.dockarea.docks.values()][i]})
+            self.c.localNamespace.update({'self': self, 'PlotDock': PlotDock, 'dock':lambda i: [d for d in self.dockarea.docks.values() if d.isVisible()][i]})
         self.c.show()
 
     def eventFilter(self, obj, event):
