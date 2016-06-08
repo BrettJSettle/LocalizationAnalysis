@@ -7,6 +7,7 @@ import pyqtgraph as pg
 import numpy as np
 import file_manager as fm
 import pyqtgraph.opengl as gl
+from pyqtgraph.dockarea import *
 
 class ROIVisual(PolygonVisual):
     def __init__(self, dock, pos, color=[1, 1, 0]):
@@ -105,8 +106,8 @@ class ROIVisual(PolygonVisual):
         widget.pan(-atX, -atY, -atZ)
         widget.opts['distance'] = 100
         widget.opts['center'] = QtGui.QVector3D(*center)
-
-        dock = self.dock.window().dockarea.addDock(name="ROI %d" % self.id, size=(300, 300), widget=widget, closable=True)
+        dock = Dock(name="ROI %d" % self.id, size=(300, 300), widget=widget, closable=True)
+        self.dock.window().dockarea.addDock(dock, 'above', self.dock)
 
 
     def exportInternalPoints(self, writer=None):

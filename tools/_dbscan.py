@@ -117,17 +117,17 @@ class SynapseWidget(QtGui.QWidget):
         roi = self.rois[self.roiComboBox.currentIndex()]
         data = roi.analysis_data
         
-        chan1 = self.channel1.currentText()
-        chan2 = self.channel2.currentText()
-        self.twoChannel = chan2 != 'None'
+        self.chan1 = self.channel1.currentText()
+        self.chan2 = self.channel2.currentText()
+        self.twoChannel = self.chan2 != 'None'
         
-        pos1 = roi.analysis_data[chan1]['points']
+        pos1 = roi.analysis_data[self.chan1]['points']
         pos1 = np.transpose([pos1.Xc.values, pos1.Yc.values])
 
         self.thread1 = DensityBasedScanner(pos1, epsilon=eps, minNeighbors=density, minP=minSize)
         self.thread1.scanFinished.connect(lambda cl, no: self.scanFinished(0, cl))
         if self.twoChannel:
-            pos2 = roi.analysis_data[chan2]['points']
+            pos2 = roi.analysis_data[self.chan2]['points']
             pos2 = np.transpose([pos2.Xc.values, pos2.Yc.values])
             self.thread2 = DensityBasedScanner(pos2, epsilon=eps, minNeighbors=density, minP=minSize)
             self.thread2.scanFinished.connect(lambda cl, no: self.scanFinished(1, cl))
@@ -140,13 +140,15 @@ class SynapseWidget(QtGui.QWidget):
         if num == 0:
             self.values = []
         roi = self.rois[self.roiComboBox.currentIndex()]
-        for ch in self.clusters:
-            for cluster in ch:
-                self.values.append([len(cluster.points), cluster.centroid[0], cluster.centroid[1], cluster.averageDistance])
-                cluster.visual(roi.dock)
+        if num == 1:
+            for i, ch in enumerate(self.clusters):
+                for cluster in ch:
+                    self.values.append([self.chan1 if i == 1 else self.chan2, len(cluster.points), cluster.centroid[0], cluster.centroid[1], cluster.averageDistance])
+                    cluster.visual(roi.dock)
 
-        self.table.setData(self.values)
-        self.table.setHorizontalHeaderLabels(["N", 'Xc', 'Yc', 'Avg. Internal Dist.'])
+        
+            self.table.setData(self.values)
+            self.table.setHorizontalHeaderLabels(["Ch", "N", 'Xc', 'Yc', 'Avg. Internal Dist.'])
 
     def comboBoxClicked(self, ev):
         txt = self.roiComboBox.currentText()

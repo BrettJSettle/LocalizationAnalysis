@@ -349,7 +349,11 @@ class MainWindow(QtGui.QMainWindow):
     def addDock(self, f, data, **kwds):
         dock = PlotDock(os.path.basename(f), data, **kwds)
         dock.sigUpdated.connect(self.showDockData)
-        self.dockarea.addDock(dock)
+        ds = [d for d in self.dockarea.docks.values() if d.isVisible()]
+        if len(ds) > 0:
+            self.dockarea.addDock(dock, 'above', ds[0])
+        else:
+            self.dockarea.addDock(dock)
         dock.container().apoptose = lambda : None
         self.dockCreated.emit(dock)
 
