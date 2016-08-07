@@ -11,6 +11,17 @@ def getBorderPoints(points):
         return [points[i] for i in outerwalls]
     return []
 
+def nearestDistances(points, points2=[]):
+    if len(points2) == 0:
+        points2 = points
+    dists = []
+    for p in points:
+        dists.append(np.inf)
+        for p2 in points2:
+            dists[-1] = min(dists[-1], distance(p, p2))
+            
+    return dists
+
 def order_walls(walls):
     new_wall = walls.pop(0)
     while walls:
